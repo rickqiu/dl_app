@@ -1,0 +1,177 @@
+---
+title: "MLP models Training on H2O cluster"
+author: "Rick Qiu"
+date: "8 December 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen=999)
+```
+
+### Introduction
+
+A Multilayer Perceptron (MLP) is a feedforward artificial neural network.
+H2O is an open source, scalable deep learning framework.
+
+The goal is to sovle the problem of
+
+Given inputs: $x1=Volume, x2=Time, x3=Speed$
+
+Predict: $\hat{y}=0,\:1,\:2 \; (low, normal, high)$
+
+### Model Evaluation
+
+#### Initialization
+
+```{r init, results='hide', message=FALSE}
+library(mlbench)
+library(caret)
+library(h2o)
+library(plotly)
+
+h2o.init(nthreads=4, min_mem_size="5g", max_mem_size="10g")
+h2o.removeAll()
+```
+
+#### Data Summary
+
+```{r}
+df <- readRDS("dat.rds")
+
+dim(df)
+head(df)
+summary(df)
+table(df$Class)
+```
+
+#### Feature scaling
+
+```{r}
+normalize <- function(x) (x/sqrt(sum(x^2)))
+df$Volume <- normalize(df$Volume)
+df$Time  <- normalize(df$Time)
+df$Speed <- normalize(df$Speed)
+```
+
+#### Data visualisation
+```{r}
+df1 <- df[1:5000,]
+df1$Class[df1$Class == 0] <- 'Low'
+df1$Class[df1$Class == 1] <- 'Normal'
+df1$Class[df1$Class == 2] <- 'High'
+
+plot_ly(df1, x = ~Volume,
+             y = ~Time, 
+             z = ~Speed, 
+             color = ~Class,
+             marker = list(size = 5)) %>%
+  add_markers() %>%
+  layout(scene = list(xaxis = list(title = 'Volume'),
+                     yaxis = list(title = 'Time'),
+                     zaxis = list(title = 'Speed')),
+         annotations = list(
+           x = 1,
+           y = 1,
+           text = '5000 Data Points',
+           xref = 'paper',
+           yref = 'paper',
+           showarrow = FALSE
+         ))
+
+```
+
+#### Data partitioning
+
+```{r}
+df$Class <-  as.factor(df[,4]) # label varaible  factor
+
+idx <- createDataPartition(df$Class, p = .6, list = FALSE)
+X_train <- df[idx,]
+
+remaining <- df[-idx,]
+idx1 <- createDataPartition(remaining$Class, p = .5, list = FALSE)
+X_val <- remaining[idx1,]
+X_test <- remaining[-idx1,]
+
+```
+
+#### Loading datasets
+
+```{r Model selection, results='hide'}
+# load datasets into H2O cluster
+train_h2o <- as.h2o(X_train)
+val_h2o <- as.h2o(X_val)
+test_h2o <- as.h2o(X_test)
+
+```
+
+#### Hyperparameters
+
+```{r}
+# Define a list of hyperparameters
+hyper_params <- list(
+  activation=c("Rectifier","Tanh","Maxout","RectifierWithDropout","TanhWithDropout","MaxoutWithDropout"),
+  hidden=list(rep.int(16,13), rep.int(13,16)),
+  input_dropout_ratio=c(0,0.02),
+  l1=seq(0,1e-4,1e-6),
+  l2=seq(0,1e-4,1e-6)
+)
+```
+
+#### Search criteria
+
+```{r}
+search_criteria <- list(strategy = "RandomDiscrete", 
+                       max_runtime_secs = 600, 
+                       max_models = 100, 
+                       seed=1234567, 
+                       stopping_rounds=5, 
+                       stopping_tolerance=1e-2,  
+                       stopping_metric="logloss")
+```
+
+#### Grid search
+
+```{r grid search, warning=FALSE, results='hide'}
+# grid search e.g. fit many models with training examples
+dl_random_grid <- h2o.grid(
+  algorithm="deeplearning",
+  grid_id = "dl_grid_random",
+  training_frame=train_h2o,
+  validation_frame=val_h2o, 
+  x = c(1,2,3),
+  y=4,
+  epochs=100,
+  score_validation_samples=10000, 
+  score_duty_cycle=0.025,         
+  max_w2=10, 
+  hyper_params = hyper_params,
+  search_criteria = search_criteria
+) 
+```
+
+#### Model selection
+
+```{r}
+grid <- h2o.getGrid("dl_grid_random",sort_by="logloss",decreasing=FALSE)
+best_model <- h2o.getModel(grid@model_ids[[1]])
+best_model
+```
+
+#### Prediction
+
+```{r prediction, warning=FALSE, results='hide'}
+pred = h2o.predict(best_model,test_h2o)
+```
+
+#### Model performance
+
+```{r}
+pred <- as.data.frame(pred)
+
+cm <- caret::confusionMatrix(pred$predict, X_test[,4])
+cm
+cm$byClass[7]
+```
