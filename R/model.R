@@ -7,7 +7,7 @@ h2o.init(nthreads=4, min_mem_size="5g", max_mem_size="10g")
 h2o.removeAll()
 
 # read in data
-df <- readRDS("input/user_plane.rds")
+df <- readRDS("R/user_plane.rds")
 df$speed <- df$userplane_download_effective_bytes_count/df$userplane_download_active_millis
 df <- df[,c(1,2,5,4)]
 
@@ -33,7 +33,7 @@ remaining <- df[-idx,]
 idx1 <- createDataPartition(remaining$class, p = .5, list = FALSE)
 X_val <- remaining[idx1,]
 X_test <- remaining[-idx1,]
-saveRDS(X_test, file ="input/test_data.rds")
+#saveRDS(X_test, file="R/test_data.rds")
 
 train_h2o <- as.h2o(X_train)
 val_h2o <- as.h2o(X_val)
@@ -77,5 +77,5 @@ best_model <- h2o.getModel(grid@model_ids[[1]])
 best_model
 
 # save the best model and test data
-#h2o.saveModel(best_model, path=getwd(), force=TRUE)
-#saveRDS(X_test, file="input/test_data.rds")
+h2o.saveModel(best_model, path=getwd(), force=TRUE)
+
